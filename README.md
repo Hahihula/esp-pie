@@ -102,6 +102,12 @@ with their operands pinned to fixed registers (pointers a0/a1, result a2,
 vector registers q0-q7). The words come from Espressif's GNU assembler
 (`riscv32-esp-elf-as -march=rv32imafc_xespv`, GCC 15.2 toolchain); each word
 has the instruction as a comment in `src/esp32s31.rs`.
+`tools/check-s31-words.sh` assembles those comments with Espressif's assembler
+and compares the bytes (CI runs it in the ESP-IDF container):
+
+```bash
+AS=~/.espressif/tools/riscv32-esp-elf/<version>/riscv32-esp-elf/bin/riscv32-esp-elf-as tools/check-s31-words.sh
+```
 
 ## Development
 

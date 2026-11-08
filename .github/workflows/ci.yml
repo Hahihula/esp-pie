@@ -49,3 +49,13 @@ jobs:
       - run: cargo build --release -Zbuild-std=core --target xtensa-esp32s3-none-elf --features esp32s3
       # The feature on an Xtensa chip without PIE (ESP32) must not build.
       - run: "! cargo build -Zbuild-std=core --target xtensa-esp32-none-elf --features esp32s3"
+
+  # The raw xespv words in src/esp32s31.rs, checked against Espressif's
+  # GNU assembler (ESP-IDF's RISC-V toolchain).
+  s31-words:
+    runs-on: ubuntu-latest
+    container: espressif/idf:latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: . "$IDF_PATH/export.sh" > /dev/null && tools/check-s31-words.sh
+        shell: bash

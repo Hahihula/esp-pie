@@ -13,6 +13,13 @@
 //! esp.movx.r.xacc.l a2
 //! ```
 
+// The kernels use the xespv vector registers q0-q7 and the XACC accumulator
+// without declaring them: LLVM doesn't know xespv at all, so it can neither
+// allocate those registers nor be told about them. They are a separate
+// register file from the RISC-V V extension's v0-v31 (the ESP32-S31 has no
+// V), so clobbering `v` registers would protect nothing. Each kernel zeroes
+// or loads everything it reads.
+
 /// CSR 0x7F2 (`CSR_PIE_STATE_REG`) = 1, as ESP-IDF's `rv_utils_enable_pie`.
 /// Only core 1 has PIE; on core 0 this does nothing.
 #[inline]
@@ -73,6 +80,8 @@ pub unsafe fn dot_i8x128(a: *const i8, b: *const i8) -> i32 {
             inout("a0") a => _,
             inout("a1") b => _,
             out("a2") r,
+            // `readonly`: the asm writes no memory but may read any (so
+            // the compiler finishes earlier stores to the operands first).
             options(nostack, readonly),
         );
     }

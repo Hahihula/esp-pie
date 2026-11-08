@@ -221,6 +221,10 @@ impl Pie {
 
 /// `sum(a[i] * b[i])` over 128 int8 lanes, with PIE when the calling core
 /// has it. |result| <= 128 * 128 * 128 = 2^21, so it never overflows.
+///
+/// Checks the core on every call; on the ESP32-S31 that is a CSR read
+/// (`mhartid`), which cost Whistle 3% of its encode time when done per dot.
+/// In loops, use [`Pie::dot_i8x128`] with a token from [`Pie::enable`].
 #[inline]
 #[must_use]
 pub fn dot_i8x128(a: &I8x128, b: &I8x128) -> i32 {
@@ -260,11 +264,10 @@ pub unsafe fn dot_i8x128_unchecked(a: *const i8, b: *const i8) -> i32 {
 #[inline]
 #[must_use]
 pub fn dot_i8x128_scalar(a: &[i8; 128], b: &[i8; 128]) -> i32 {
-    let mut r = 0i32;
-    for i in 0..128 {
-        r += i32::from(a[i]) * i32::from(b[i]);
-    }
-    r
+    a.iter()
+        .zip(b)
+        .map(|(&x, &y)| i32::from(x) * i32::from(y))
+        .sum()
 }
 
 /// `sum(a[i] * b[i])` over whole blocks of 128 lanes, with PIE when the

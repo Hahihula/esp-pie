@@ -1,16 +1,37 @@
 //! ESP32-S3: Xtensa `ee.*` instructions (the `esp` toolchain's LLVM
 //! assembles them).
+//!
+//! The kernels use the vector registers q0-q7 and the ACCX accumulator
+//! without declaring them to the compiler: `rustc` has no register names for
+//! them on Xtensa (`out("q0") _` is rejected as an unknown register), and
+//! LLVM never allocates them for compiled Rust code. Checked on a whole
+//! firmware: every `ee.vld.128.ip`, `ee.vmulas.s8.accx` and `ee.zero.accx`
+//! in the binary belongs to an inlined copy of these kernels. Each kernel
+//! zeroes or loads everything it reads, so nothing carries over between
+//! blocks either.
 
 /// Coprocessor 3 ("AI" in the S3 core config) next to the FPU (CP0).
-/// `CPENABLE` is per core and saved around interrupts.
+/// `CPENABLE` is per core. The read-modify-write runs with interrupts
+/// masked (`rsil 15`), so a handler that changes `CPENABLE` in between can't
+/// have its change overwritten.
 #[inline]
 pub fn enable() {
-    // SAFETY: setting a CPENABLE bit only allows more instructions.
+    // SAFETY: masks interrupts for four instructions and restores PS;
+    // setting a CPENABLE bit only allows more instructions.
     unsafe {
-        let mut v: u32;
-        core::arch::asm!("rsr {0}, cpenable", out(reg) v, options(nomem, nostack));
-        v |= 1 << 3;
-        core::arch::asm!("wsr {0}, cpenable", "rsync", in(reg) v, options(nomem, nostack));
+        core::arch::asm!(
+            "rsil {ps}, 15",
+            "rsr {v}, cpenable",
+            "or {v}, {v}, {bit}",
+            "wsr {v}, cpenable",
+            "rsync",
+            "wsr {ps}, ps",
+            "rsync",
+            ps = out(reg) _,
+            v = out(reg) _,
+            bit = in(reg) 1u32 << 3,
+            options(nomem, nostack),
+        );
     }
 }
 
@@ -62,6 +83,8 @@ pub unsafe fn dot_i8x128(a: *const i8, b: *const i8) -> i32 {
             a = inout(reg) a => _,
             b = inout(reg) b => _,
             r = out(reg) r,
+            // `readonly`: the asm writes no memory but may read any (so
+            // the compiler finishes earlier stores to the operands first).
             options(nostack, readonly),
         );
     }
