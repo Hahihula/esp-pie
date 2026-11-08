@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The portable fallback: tests, doctests, lints, formatting.
+  host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      # A chip feature on a PC builds with the fallback.
+      - run: cargo test --features esp32s31
+
+  esp32s31:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: riscv32imafc-unknown-none-elf, riscv32imac-unknown-none-elf
+          components: clippy
+      - run: cargo clippy --target riscv32imafc-unknown-none-elf --features esp32s31 -- -D warnings
+      - run: cargo build --release --target riscv32imafc-unknown-none-elf --features esp32s31
+      # The feature on a RISC-V chip without PIE (ESP32-C3/C6) must not build.
+      - run: "! cargo build --target riscv32imac-unknown-none-elf --features esp32s31"
+
+  esp32s3:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: esp-rs/xtensa-toolchain@v1.6
+        with:
+          default: true
+          buildtargets: esp32s3,esp32
+          ldproxy: false
+      - run: cargo build --release -Zbuild-std=core --target xtensa-esp32s3-none-elf --features esp32s3
+      # The feature on an Xtensa chip without PIE (ESP32) must not build.
+      - run: "! cargo build -Zbuild-std=core --target xtensa-esp32-none-elf --features esp32s3"

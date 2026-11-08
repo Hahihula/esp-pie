@@ -1,0 +1,33 @@
+[package]
+name         = "esp-pie"
+version      = "0.1.0"
+edition      = "2024"
+# For the fallback and the ESP32-S31. The ESP32-S3 path needs the Xtensa
+# `esp` toolchain (nightly-based: inline asm on Xtensa is still unstable).
+rust-version = "1.85"
+license      = "MIT OR Apache-2.0"
+description  = "no_std SIMD kernels for the PIE vector extensions of the ESP32-S3 (Xtensa) and ESP32-S31 (RISC-V xespv)"
+repository   = "https://github.com/Hahihula/esp-pie"
+keywords     = ["esp32", "simd", "no-std", "embedded", "int8"]
+categories   = ["embedded", "no-std", "hardware-support"]
+readme       = "README.md"
+exclude      = [".github"]
+
+[lints.rust]
+missing_docs                   = "warn"
+missing_debug_implementations  = "warn"
+unsafe_op_in_unsafe_fn         = "deny"
+# `esp32s3ops` exists only in the esp toolchain's Xtensa targets.
+unexpected_cfgs                = { level = "warn", check-cfg = ['cfg(target_feature, values("esp32s3ops"))'] }
+
+[features]
+default = []
+# Pick the chip. With neither, every kernel is the portable Rust fallback,
+# so code using the crate also builds and tests on a PC.
+# Needs the `esp` toolchain (Xtensa inline asm).
+esp32s3 = []
+# Stable Rust; the instructions are emitted as raw words.
+esp32s31 = []
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
