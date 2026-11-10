@@ -1,12 +1,12 @@
 [package]
 name         = "esp-pie"
-version      = "0.1.0"
+version      = "0.2.0"
 edition      = "2024"
-# For the fallback and the ESP32-S31. The ESP32-S3 path needs the Xtensa
+# For the fallback, the ESP32-S31 and the ESP32-P4. The ESP32-S3 path needs the Xtensa
 # `esp` toolchain (nightly-based: inline asm on Xtensa is still unstable).
 rust-version = "1.85"
 license      = "MIT OR Apache-2.0"
-description  = "no_std SIMD kernels for the PIE vector extensions of the ESP32-S3 (Xtensa) and ESP32-S31 (RISC-V xespv)"
+description  = "no_std SIMD kernels for the PIE vector extensions of the ESP32-S3 (Xtensa), ESP32-S31 and ESP32-P4 (RISC-V xespv)"
 repository   = "https://github.com/Hahihula/esp-pie"
 keywords     = ["esp32", "simd", "no-std", "embedded", "int8"]
 categories   = ["embedded", "no-std", "hardware-support"]
@@ -28,6 +28,8 @@ default = []
 esp32s3 = []
 # Stable Rust; the instructions are emitted as raw words.
 esp32s31 = []
+# Chip revision v3.0+ (the xespv encoding the S31 also uses). Stable Rust.
+esp32p4  = []
 
 [package.metadata.docs.rs]
 targets = ["x86_64-unknown-linux-gnu"]

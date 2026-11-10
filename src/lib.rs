@@ -4,14 +4,17 @@
 //! | chip | feature | PIE | notes |
 //! |---|---|---|---|
 //! | ESP32-S3 | `esp32s3` | both cores | Xtensa `ee.*` instructions, `esp` toolchain |
-//! | ESP32-S31 | `esp32s31` | core 1 only | RISC-V `xespv` (as on the ESP32-P4), stable Rust |
+//! | ESP32-S31 | `esp32s31` | core 1 only | RISC-V `xespv`, stable Rust |
+//! | ESP32-P4 (rev v3.0+) | `esp32p4` | both HP cores | RISC-V `xespv` (same words as the S31), stable Rust |
 //! | anything else | none | — | portable Rust fallback, same results |
 //!
 //! A chip feature on a target of another architecture (e.g. a PC) also
 //! builds, with the fallback, so code using the crate can be tested on a
 //! PC. A chip feature on the wrong chip of the right architecture (another
 //! Xtensa chip, or a RISC-V target without the F extension such as the
-//! ESP32-C3/C6) is a compile error.
+//! ESP32-C3/C6) is a compile error. The ESP32-S31 and the ESP32-P4 share a
+//! target (`riscv32imafc-unknown-none-elf`), so between those two only the
+//! feature tells them apart.
 //!
 //! ```
 //! use esp_pie::{I8x128, Pie, SelfTest};
@@ -33,7 +36,7 @@
 //!
 //! - Enable PIE on each core that runs PIE code ([`enable`] or
 //!   [`Pie::enable`]). Without it the first vector instruction raises an
-//!   exception (S3: coprocessor disabled, S31: illegal instruction).
+//!   exception (S3: coprocessor disabled, S31/P4: illegal instruction).
 //! - Under esp-rtos (the Rust RTOS) only one task per core may use PIE: it
 //!   does not save the vector registers (q0-q7) and accumulators on a context
 //!   switch. Run the kernels from one task, or from a core of their own.
@@ -41,6 +44,9 @@
 //!   task to its core once it uses PIE; that doesn't apply here.)
 //! - On the ESP32-S31 only core 1 has PIE. [`available`] and [`Pie`] tell the
 //!   cores apart, and the safe kernels fall back to plain Rust on core 0.
+//!   The ESP32-P4 has PIE on both HP cores.
+//! - ESP32-P4: chip revision v3.0 or later. Earlier revisions implement an
+//!   older PIE encoding (`xespv2p1`); [`self_test`] fails there.
 //!
 //! Every kernel gives bit-identical results to its fallback (integer math).
 
@@ -50,8 +56,12 @@
     feature(asm_experimental_arch)
 )]
 
-#[cfg(all(feature = "esp32s3", feature = "esp32s31"))]
-compile_error!("esp-pie: enable only one chip feature (`esp32s3` or `esp32s31`)");
+#[cfg(any(
+    all(feature = "esp32s3", feature = "esp32s31"),
+    all(feature = "esp32s3", feature = "esp32p4"),
+    all(feature = "esp32s31", feature = "esp32p4"),
+))]
+compile_error!("esp-pie: enable only one chip feature (`esp32s3`, `esp32s31` or `esp32p4`)");
 
 #[cfg(all(
     feature = "esp32s3",
@@ -64,7 +74,8 @@ compile_error!(
 );
 
 // Stable Rust doesn't expose the F extension as a cfg; `zicsr` comes with it
-// and distinguishes riscv32imafc (ESP32-S31) from riscv32imac (C3, C6, H2).
+// and distinguishes riscv32imafc (ESP32-S31, ESP32-P4) from riscv32imac
+// (C3, C6, H2, and the P4's LP core).
 #[cfg(all(
     feature = "esp32s31",
     target_arch = "riscv32",
@@ -74,6 +85,15 @@ compile_error!(
     "esp-pie: the `esp32s31` feature needs the ESP32-S31 target (riscv32imafc-unknown-none-elf); \
      this RISC-V chip has no PIE"
 );
+#[cfg(all(
+    feature = "esp32p4",
+    target_arch = "riscv32",
+    not(target_feature = "zicsr")
+))]
+compile_error!(
+    "esp-pie: the `esp32p4` feature needs the ESP32-P4 HP-core target (riscv32imafc-unknown-none-elf); \
+     this RISC-V core has no PIE"
+);
 
 use core::marker::PhantomData;
 
@@ -82,14 +102,23 @@ mod esp32s3;
 #[cfg(all(target_arch = "xtensa", feature = "esp32s3"))]
 use esp32s3 as chip;
 
-#[cfg(all(target_arch = "riscv32", feature = "esp32s31"))]
-mod esp32s31;
-#[cfg(all(target_arch = "riscv32", feature = "esp32s31"))]
-use esp32s31 as chip;
+#[cfg(all(
+    target_arch = "riscv32",
+    any(feature = "esp32s31", feature = "esp32p4")
+))]
+mod xespv;
+#[cfg(all(
+    target_arch = "riscv32",
+    any(feature = "esp32s31", feature = "esp32p4")
+))]
+use xespv as chip;
 
 #[cfg(not(any(
     all(target_arch = "xtensa", feature = "esp32s3"),
-    all(target_arch = "riscv32", feature = "esp32s31")
+    all(
+        target_arch = "riscv32",
+        any(feature = "esp32s31", feature = "esp32p4")
+    )
 )))]
 mod chip {
     pub fn enable() {}
@@ -155,7 +184,8 @@ impl AsMut<[i8; 128]> for I8x128 {
 }
 
 /// Enables PIE on the calling core: ESP32-S3 sets coprocessor 3 in
-/// `CPENABLE`, ESP32-S31 writes CSR `0x7F2` (ESP-IDF `rv_utils_enable_pie`).
+/// `CPENABLE`, ESP32-S31 and ESP32-P4 write CSR `0x7F2` (ESP-IDF
+/// `rv_utils_enable_pie`).
 /// On S31 core 0, and without a chip feature, it does nothing.
 #[inline]
 pub fn enable() {
@@ -163,7 +193,8 @@ pub fn enable() {
 }
 
 /// Whether the calling core has PIE (it still needs [`enable`]): always on
-/// the ESP32-S3, core 1 only on the ESP32-S31, never without a chip feature.
+/// the ESP32-S3 and the ESP32-P4, core 1 only on the ESP32-S31, never without
+/// a chip feature.
 ///
 /// On the ESP32-S31 this reads `mhartid`. In a hot loop, hold a [`Pie`] (or
 /// ask once) rather than checking on every kernel call.
@@ -244,8 +275,8 @@ pub fn dot_i8x128(a: &I8x128, b: &I8x128) -> i32 {
 /// - Both are 16-byte aligned. Debug builds assert it; release builds don't
 ///   check, and then the outcome depends on the chip: the ESP32-S3's vector
 ///   loads ignore the low address bits and silently read the aligned-down
-///   block (a wrong result, no fault), while the ESP32-S31 handles
-///   misaligned loads in hardware. [`I8x128::from_ref`] checks alignment.
+///   block (a wrong result, no fault), while the ESP32-S31 and ESP32-P4
+///   handle misaligned loads in hardware. [`I8x128::from_ref`] checks alignment.
 /// - With a chip feature: the calling core has PIE ([`available`]) and it
 ///   is enabled ([`enable`]).
 #[inline(always)] // engines' hot path: keep the kernel inside their loops

@@ -23,19 +23,26 @@ jobs:
       - run: cargo test
       # A chip feature on a PC builds with the fallback.
       - run: cargo test --features esp32s31
+      - run: cargo test --features esp32p4
 
-  esp32s31:
+  # The ESP32-S31 and ESP32-P4 share the xespv kernels and the target.
+  xespv:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        chip: [esp32s31, esp32p4]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: riscv32imafc-unknown-none-elf, riscv32imac-unknown-none-elf
           components: clippy
-      - run: cargo clippy --target riscv32imafc-unknown-none-elf --features esp32s31 -- -D warnings
-      - run: cargo build --release --target riscv32imafc-unknown-none-elf --features esp32s31
-      # The feature on a RISC-V chip without PIE (ESP32-C3/C6) must not build.
-      - run: "! cargo build --target riscv32imac-unknown-none-elf --features esp32s31"
+      - run: cargo clippy --target riscv32imafc-unknown-none-elf --features ${{ matrix.chip }} -- -D warnings
+      - run: cargo build --release --target riscv32imafc-unknown-none-elf --features ${{ matrix.chip }}
+      # The feature on a RISC-V core without PIE (ESP32-C3/C6, P4 LP core) must not build.
+      - run: "! cargo build --target riscv32imac-unknown-none-elf --features ${{ matrix.chip }}"
+      # Two chip features at once must not build.
+      - run: "! cargo build --target riscv32imafc-unknown-none-elf --features esp32s31,esp32p4"
 
   esp32s3:
     runs-on: ubuntu-latest
@@ -50,12 +57,12 @@ jobs:
       # The feature on an Xtensa chip without PIE (ESP32) must not build.
       - run: "! cargo build -Zbuild-std=core --target xtensa-esp32-none-elf --features esp32s3"
 
-  # The raw xespv words in src/esp32s31.rs, checked against Espressif's
+  # The raw xespv words in src/xespv.rs, checked against Espressif's
   # GNU assembler (ESP-IDF's RISC-V toolchain).
-  s31-words:
+  xespv-words:
     runs-on: ubuntu-latest
     container: espressif/idf:latest
     steps:
       - uses: actions/checkout@v4
-      - run: . "$IDF_PATH/export.sh" > /dev/null && tools/check-s31-words.sh
+      - run: . "$IDF_PATH/export.sh" > /dev/null && tools/check-xespv-words.sh
         shell: bash

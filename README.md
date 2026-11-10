@@ -7,6 +7,7 @@ vector units of Espressif chips:
 |---|---|---|---|
 | ESP32-S3 | `esp32s3` | both cores | Xtensa `ee.*` inline asm (needs the `esp` toolchain) |
 | ESP32-S31 | `esp32s31` | core 1 only | RISC-V `xespv` as raw instruction words (stable Rust) |
+| ESP32-P4 (chip rev v3.0+) | `esp32p4` | both HP cores | the same `xespv` words as the S31 (stable Rust) |
 | anything else | none | — | plain Rust, same results |
 
 Without a chip feature every kernel is the portable fallback, so a library
@@ -45,13 +46,15 @@ assert_eq!(dot, -256);
 
 A chip feature on a PC builds with the fallback (so libraries using esp-pie
 test on a PC). On the wrong chip of the same architecture it is a compile
-error: `esp32s3` needs `xtensa-esp32s3-none-elf`, `esp32s31` needs
-`riscv32imafc-unknown-none-elf` (not the ESP32-C3/C6/H2's `riscv32imac`).
+error: `esp32s3` needs `xtensa-esp32s3-none-elf`, `esp32s31` and `esp32p4`
+need `riscv32imafc-unknown-none-elf` (not the ESP32-C3/C6/H2's or the P4 LP
+core's `riscv32imac`). The S31 and the P4 share that target, so between those
+two only the feature tells them apart.
 
 | item | what it does |
 |---|---|
-| `enable()` | switches PIE on for the calling core (S3: `CPENABLE` bit 3; S31: CSR `0x7F2`) |
-| `available()` | whether the calling core has PIE (S31: reads `mhartid`, true on core 1) |
+| `enable()` | switches PIE on for the calling core (S3: `CPENABLE` bit 3; S31, P4: CSR `0x7F2`) |
+| `available()` | whether the calling core has PIE (S31: reads `mhartid`, true on core 1; S3, P4: always) |
 | `Pie::enable()` | `enable()`, then a core-bound token if this core has PIE; its kernels skip the per-call check |
 | `self_test()` | runs every entry point against the fallback; returns `SelfTest::Pie`, `FallbackOnly` (no PIE on this core: nothing checked) or `Failed` |
 | `I8x128` | 128 int8 lanes, 16-byte aligned; `I8x128::from_ref(&[i8; 128])` views an aligned array as one |
@@ -63,12 +66,12 @@ error: `esp32s3` needs `xtensa-esp32s3-none-elf`, `esp32s31` needs
 ## Rules
 
 - **Enable per core.** Without `enable()` the first vector instruction raises
-  an exception (S3: coprocessor disabled; S31: illegal instruction).
+  an exception (S3: coprocessor disabled; S31, P4: illegal instruction).
 - **Aligned operands.** The safe kernels take `I8x128`, which is aligned.
   With `dot_i8x128_unchecked`, a misaligned pointer is the caller's bug, and
   release builds don't catch it: the ESP32-S3's vector loads ignore the low
   address bits and silently read the aligned-down block (a wrong result, no
-  fault); the ESP32-S31 handles misaligned loads in hardware.
+  fault); the ESP32-S31 and ESP32-P4 handle misaligned loads in hardware.
 - **One PIE task per core under esp-rtos.** esp-rtos (the Rust RTOS) doesn't
   save the vector registers and accumulators on a context switch, so run the
   kernels from one task per core, or give them a core of their own. (ESP-IDF's
@@ -81,6 +84,10 @@ error: `esp32s3` needs `xtensa-esp32s3-none-elf`, `esp32s31` needs
   tell the cores apart. `available()` is a CSR read on the S31, so in hot
   loops hold a `Pie` or ask once per batch of work (asking per call cost
   Whistle 3% of its encode time).
+- **ESP32-P4: chip revision v3.0 or later.** ESP-IDF builds the P4 v3.x with
+  `-march=..._xespv`, the S31's encoding, and only revisions before v3.0 with
+  the older, incompatible `xespv2p1` (`components/soc/project_include.cmake`).
+  esp-hal supports only v3.x too. On an older chip `self_test()` fails.
 - **SAR.** The dot product uses `ee.vmulas.s8.accx`, which accumulates full
   products and doesn't read SAR, so it needs no SAR setup on the S3.
 
@@ -95,18 +102,23 @@ transcription (C-engine spec):
 | decode | 17.7 s | 8.2 s |
 | total | 41.6 s | 14.8 s |
 
-## How the S31 words were made
+On the ESP32-P4X-Function-EV-Board (P4 v3.2 at 400 MHz, PIE on both cores,
+[whistle-esp](https://github.com/Hahihula/whistle-esp)'s `p4` firmware), the
+2.5 s self-test clip with the default 5-beam spec takes 4.2 s to encode and
+11.2 s to decode, with the encoder checksum the PC gives (`db9a1371`).
 
-Upstream LLVM doesn't know `xespv`, so the S31 kernels are `.4byte` words
-with their operands pinned to fixed registers (pointers a0/a1, result a2,
-vector registers q0-q7). The words come from Espressif's GNU assembler
+## How the xespv words were made
+
+Upstream LLVM doesn't know `xespv`, so the S31 and P4 kernels are `.4byte`
+words with their operands pinned to fixed registers (pointers a0/a1, result
+a2, vector registers q0-q7). The words come from Espressif's GNU assembler
 (`riscv32-esp-elf-as -march=rv32imafc_xespv`, GCC 15.2 toolchain); each word
-has the instruction as a comment in `src/esp32s31.rs`.
-`tools/check-s31-words.sh` assembles those comments with Espressif's assembler
-and compares the bytes (CI runs it in the ESP-IDF container):
+has the instruction as a comment in `src/xespv.rs`.
+`tools/check-xespv-words.sh` assembles those comments with Espressif's
+assembler and compares the bytes (CI runs it in the ESP-IDF container):
 
 ```bash
-AS=~/.espressif/tools/riscv32-esp-elf/<version>/riscv32-esp-elf/bin/riscv32-esp-elf-as tools/check-s31-words.sh
+AS=~/.espressif/tools/riscv32-esp-elf/<version>/riscv32-esp-elf/bin/riscv32-esp-elf-as tools/check-xespv-words.sh
 ```
 
 ## Development
@@ -115,15 +127,16 @@ AS=~/.espressif/tools/riscv32-esp-elf/<version>/riscv32-esp-elf/bin/riscv32-esp-
 cargo test                                         # fallback and doctests, on the PC
 rustup target add riscv32imafc-unknown-none-elf    # once
 cargo +stable build --release --target riscv32imafc-unknown-none-elf --features esp32s31
+cargo +stable build --release --target riscv32imafc-unknown-none-elf --features esp32p4
 cargo +esp build --release -Zbuild-std=core --target xtensa-esp32s3-none-elf --features esp32s3
 ```
 
-`rust-version` (1.85) covers the fallback and the ESP32-S31. The ESP32-S3 path
+`rust-version` (1.85) covers the fallback, the ESP32-S31 and the ESP32-P4. The ESP32-S3 path
 needs the `esp` toolchain (`espup install`): inline assembly on Xtensa is
 still behind a nightly feature gate there.
 
 GitHub Actions (`.github/workflows/ci.yml`) runs formatting, clippy, the tests
-and doctests, and builds for both chips, including checks that the chip
+and doctests, and builds for every chip, including checks that the chip
 features refuse the wrong chips.
 
 The on-chip check is `self_test()`; the Whistle firmwares run it at boot and

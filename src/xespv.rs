@@ -1,4 +1,8 @@
-//! ESP32-S31: the `xespv` RISC-V extension (shared with the ESP32-P4).
+//! ESP32-S31 and ESP32-P4 (chip revision v3.0+): the `xespv` RISC-V
+//! extension. Both chips use the same encodings: ESP-IDF builds both with
+//! `-march=..._xespv` (`components/soc/project_include.cmake`); only P4
+//! revisions before v3.0 use the older, incompatible `xespv2p1`, which this
+//! crate doesn't support (nor does esp-hal).
 //!
 //! Upstream LLVM doesn't know `xespv`, so the instructions are emitted as raw
 //! words, and since their operands are encoded in the words, the asm pins
@@ -16,12 +20,12 @@
 // The kernels use the xespv vector registers q0-q7 and the XACC accumulator
 // without declaring them: LLVM doesn't know xespv at all, so it can neither
 // allocate those registers nor be told about them. They are a separate
-// register file from the RISC-V V extension's v0-v31 (the ESP32-S31 has no
+// register file from the RISC-V V extension's v0-v31 (neither chip has
 // V), so clobbering `v` registers would protect nothing. Each kernel zeroes
 // or loads everything it reads.
 
 /// CSR 0x7F2 (`CSR_PIE_STATE_REG`) = 1, as ESP-IDF's `rv_utils_enable_pie`.
-/// Only core 1 has PIE; on core 0 this does nothing.
+/// On ESP32-S31 core 0, which has no PIE, this does nothing.
 #[inline]
 pub fn enable() {
     if available() {
@@ -30,15 +34,24 @@ pub fn enable() {
     }
 }
 
-/// True on core 1. ESP-IDF's FreeRTOS port says so too (`portasm.S`: "On
-/// the ESP32-S31, the PIE is only available on core 1"); core 0 raises an
-/// illegal-instruction exception even with the CSR set.
+/// ESP32-S31: true on core 1 only. ESP-IDF's FreeRTOS port says so too
+/// (`portasm.S`: "On the ESP32-S31, the PIE is only available on core 1");
+/// core 0 raises an illegal-instruction exception even with the CSR set.
+#[cfg(feature = "esp32s31")]
 #[inline(always)]
 pub fn available() -> bool {
     let hart: usize;
     // SAFETY: reading mhartid has no side effects.
     unsafe { core::arch::asm!("csrr {0}, mhartid", out(reg) hart, options(nomem, nostack)) };
     hart == 1
+}
+
+/// ESP32-P4: both HP cores have PIE (`SOC_CPU_HAS_PIE`, no per-core
+/// exception in ESP-IDF), so no CSR read is needed.
+#[cfg(all(feature = "esp32p4", not(feature = "esp32s31")))] // both: lib.rs errors
+#[inline(always)]
+pub fn available() -> bool {
+    true
 }
 
 /// 16 multiply-adds per `esp.vmulas.s8.xacc` into the XACC accumulator.
@@ -48,7 +61,7 @@ pub fn available() -> bool {
 #[inline(always)]
 pub unsafe fn dot_i8x128(a: *const i8, b: *const i8) -> i32 {
     let r: i32;
-    // SAFETY: forwarded from the caller (alignment, 128 bytes, core 1, PIE on).
+    // SAFETY: forwarded from the caller (alignment, 128 bytes, PIE core, PIE on).
     unsafe {
         core::arch::asm!(
             ".4byte 0x0000001b", // esp.zero.xacc
